@@ -15,15 +15,11 @@ app.get('/', (req, res) => {
 })
 
 app.post('/webhook', async (req, res) => {
-  var response
-
   console.log(req.headers)
   console.log(req.body)
 
   const message = `v0:${req.headers['x-zm-request-timestamp']}:${JSON.stringify(req.body)}`
-
   const hashForVerify = crypto.createHmac('sha256', process.env.ZOOM_WEBHOOK_SECRET_TOKEN).update(message).digest('hex')
-
   const signature = `v0=${hashForVerify}`
 
   if (req.headers['x-zm-signature'] === signature) {
@@ -31,7 +27,7 @@ app.post('/webhook', async (req, res) => {
     if (req.body.event === 'endpoint.url_validation') {
       const hashForValidate = crypto.createHmac('sha256', process.env.ZOOM_WEBHOOK_SECRET_TOKEN).update(req.body.payload.plainToken).digest('hex')
 
-      response = {
+      const response = {
         message: {
           plainToken: req.body.payload.plainToken,
           encryptedToken: hashForValidate
@@ -40,11 +36,19 @@ app.post('/webhook', async (req, res) => {
       }
 
       console.log(response.message)
-
       res.status(response.status).json(response.message)
 
     } else {
-      const n8nWebhookUrl = process.env.N8N_WEBHOOK_URL;
+      const n8nWebhookUrl = process.env.N8N_WEBHOOK_URL
+      console.log('📦 URL de webhook n8n:', n8nWebhookUrl)
+
+      // Validar que la URL esté bien formada
+      try {
+        new URL(n8nWebhookUrl)
+      } catch (error) {
+        console.error('❌ URL inválida detectada:', n8nWebhookUrl)
+        return res.status(400).json({ message: 'URL de webhook de n8n inválida' })
+      }
 
       try {
         await axios({
@@ -62,9 +66,8 @@ app.post('/webhook', async (req, res) => {
     }
 
   } else {
-    response = { message: 'Unauthorized request to Zoom Webhook sample.', status: 401 }
-    console.log(response.message)
-    res.status(response.status).json(response)
+    console.log('Unauthorized request to Zoom Webhook sample.')
+    res.status(401).json({ message: 'Unauthorized request to Zoom Webhook sample.' })
   }
 })
 
