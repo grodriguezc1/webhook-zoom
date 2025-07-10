@@ -70,3 +70,10 @@ app.post('/webhook', (req, res) => {
 })
 
 app.listen(port, () => console.log(`Zoom Webhook sample listening on port ${port}!`))
+
+const PORT = process.env.PORT || 3000;
+
+app.listen(PORT, () => {
+  console.log(`Listening on port ${PORT}`);
+});
+
