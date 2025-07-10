@@ -48,22 +48,16 @@ app.post('/webhook', async (req, res) => {  // async porque haremos await
       res.status(response.status)
       res.json(response.message)
     } else {
-      // Aquí recibes eventos reales, envíalos a n8n:
-
       const n8nWebhookUrl = process.env.N8N_WEBHOOK_URL;
 
-      axios.post(n8nWebhookUrl, {
-        event: req.body.event,
-        payload: req.body.payload
-      })
-      .then(() => {
-        console.log('Evento enviado a n8n con éxito');
+      try {
+        await axios.post(n8nWebhookUrl, req.body); // <-- ENVÍA TODO el body como está
+        console.log('✅ Evento enviado a n8n con éxito');
         res.status(200).json({ message: 'Evento recibido y reenviado a n8n' });
-      })
-      .catch(err => {
-        console.error('Error enviando evento a n8n:', err.message);
+      } catch (err) {
+        console.error('❌ Error enviando evento a n8n:', err.message);
         res.status(500).json({ message: 'Error enviando evento a n8n' });
-      });
+      }
     }
   } else {
 
