@@ -47,17 +47,27 @@ app.post('/webhook', async (req, res) => {
     if (req.body.event === 'webinar.ended') {
       console.log('🔄 Reenviando a:', process.env.N8N_WEBHOOK_URL);
       
-      const response = await axios.post(
-        process.env.N8N_WEBHOOK_URL,
-        {
+const response = await axios.post(
+  process.env.N8N_WEBHOOK_URL,
+  {
           event: req.body.event,
-          payload: req.body.payload,
-          metadata: {
+          payload: {
+            // Todos los datos originales de Zoom
+            ...req.body.payload,
+            
+            // Nuevos campos de paginación (se añaden sin afectar lo existente)
+            pagination: {
+              page_count: req.body.payload.page_count,     // Número total de páginas
+              page_size: req.body.payload.page_size,      // Items por página
+              next_page_token: req.body.payload.next_page_token // Token para siguiente página
+            }
+          },
+          metadata: {  // Metadata original se mantiene igual
             server: 'Zoom Webhook Proxy',
             timestamp: new Date().toISOString()
           }
         },
-        {
+        {  // Configuración de axios permanece igual
           headers: { 'Content-Type': 'application/json' },
           timeout: 10000
         }
