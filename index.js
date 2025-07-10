@@ -16,7 +16,7 @@ if (!process.env.ZOOM_WEBHOOK_SECRET_TOKEN ||
   process.exit(1);
 }
 
-// Función para obtener token de acceso OAuth
+// Función para obtener token de acceso OAuth (sin cambios)
 async function getZoomAccessToken() {
   try {
     const credentials = Buffer.from(`${process.env.ZOOM_CLIENT_ID}:${process.env.ZOOM_CLIENT_SECRET}`).toString('base64');
@@ -40,7 +40,7 @@ async function getZoomAccessToken() {
   }
 }
 
-// Nueva función para obtener todos los participantes con OAuth
+// Función para obtener participantes (sin cambios)
 async function getAllParticipants(webinarId) {
   let allParticipants = [];
   let nextPageToken = null;
@@ -57,7 +57,7 @@ async function getAllParticipants(webinarId) {
     
     try {
       const params = {
-        page_size: 300,  // Máximo permitido por Zoom
+        page_size: 300,
         ...(nextPageToken && { next_page_token: nextPageToken })
       };
 
@@ -91,7 +91,7 @@ app.post('/webhook', async (req, res) => {
   try {
     console.log('📩 Evento recibido:', req.body.event);
 
-    // Validación de firma Zoom
+    // Validación de firma Zoom (existente)
     const message = `v0:${req.headers['x-zm-request-timestamp']}:${JSON.stringify(req.body)}`;
     const signature = `v0=${crypto.createHmac('sha256', process.env.ZOOM_WEBHOOK_SECRET_TOKEN)
       .update(message)
@@ -102,7 +102,7 @@ app.post('/webhook', async (req, res) => {
       return res.status(401).json({ error: 'Firma no válida' });
     }
 
-    // Validación inicial de Zoom
+    // Validación inicial de Zoom (existente)
     if (req.body.event === 'endpoint.url_validation') {
       const responseToken = crypto.createHmac('sha256', process.env.ZOOM_WEBHOOK_SECRET_TOKEN)
         .update(req.body.payload.plainToken)
@@ -114,29 +114,38 @@ app.post('/webhook', async (req, res) => {
       });
     }
 
-    // Procesar solo webinar.ended
+    // Procesar solo webinar.ended (CORRECCIÓN AQUÍ)
     if (req.body.event === 'webinar.ended') {
       // Responder inmediatamente a Zoom
       res.status(200).json({ success: true });
       
-      console.log('🔍 Obteniendo todos los participantes...');
-      const webinarId = req.body.payload.id;
+      // Verificar estructura del payload
+      if (!req.body.payload.object || !req.body.payload.object.id) {
+        console.error('❌ Estructura de payload inválida para webinar.ended');
+        console.error('Payload recibido:', JSON.stringify(req.body.payload, null, 2));
+        return;
+      }
+
+      const webinarInfo = req.body.payload.object;
+      const webinarId = webinarInfo.id;
+      
+      console.log('🔍 Obteniendo participantes para webinar:', webinarId);
       
       try {
-        // Obtener todos los participantes paginados
+        // Obtener todos los participantes
         const participants = await getAllParticipants(webinarId);
         console.log(`👥 Total de participantes obtenidos: ${participants.length}`);
 
-        // Enviar solo los datos esenciales a n8n
+        // Construir payload para n8n
         const payloadToN8N = {
           event: 'webinar.ended',
           payload: {
             id: webinarId,
-            uuid: req.body.payload.uuid,
-            topic: req.body.payload.topic,
-            start_time: req.body.payload.start_time,
-            end_time: req.body.payload.end_time,
-            duration: req.body.payload.duration,
+            uuid: webinarInfo.uuid,
+            topic: webinarInfo.topic,
+            start_time: webinarInfo.start_time,
+            end_time: webinarInfo.end_time,
+            duration: webinarInfo.duration,
             participants: participants
           }
         };
@@ -144,7 +153,7 @@ app.post('/webhook', async (req, res) => {
         console.log(`🔄 Enviando ${participants.length} participantes a n8n...`);
         await axios.post(process.env.N8N_WEBHOOK_URL, payloadToN8N, {
           headers: { 'Content-Type': 'application/json' },
-          timeout: 30000 // 30 segundos para enviar
+          timeout: 30000
         });
         
         console.log('✅ Datos enviados exitosamente a n8n');
