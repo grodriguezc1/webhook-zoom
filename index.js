@@ -1,75 +1,82 @@
-require('dotenv').config()
-const express = require('express')
-const bodyParser = require('body-parser')
-const crypto = require('crypto')
-const axios = require('axios')
+require('dotenv').config();
+const express = require('express');
+const bodyParser = require('body-parser');
+const crypto = require('crypto');
+const axios = require('axios');
 
-const app = express()
-const port = process.env.PORT || 3000
+const app = express();
+const port = process.env.PORT || 3000;
 
-app.use(bodyParser.json())
+app.use(bodyParser.json());
 
+// Ruta de prueba
 app.get('/', (req, res) => {
-  res.status(200)
-  res.send(`Zoom Webhook sample successfully running. Set this URL with the /webhook path as your apps Event notification endpoint URL. https://github.com/zoom/webhook-sample`)
-})
+  res.status(200).send('Servidor de webhooks activo');
+});
 
+// Procesamiento de webhooks
 app.post('/webhook', async (req, res) => {
-  console.log(req.headers)
-  console.log(req.body)
+  console.log('📩 Evento recibido:', req.body.event);
 
-  const message = `v0:${req.headers['x-zm-request-timestamp']}:${JSON.stringify(req.body)}`
-  const hashForVerify = crypto.createHmac('sha256', process.env.ZOOM_WEBHOOK_SECRET_TOKEN).update(message).digest('hex')
-  const signature = `v0=${hashForVerify}`
+  // 1. Validar firma de Zoom
+  const message = `v0:${req.headers['x-zm-request-timestamp']}:${JSON.stringify(req.body)}`;
+  const hash = crypto.createHmac('sha256', process.env.ZOOM_WEBHOOK_SECRET_TOKEN)
+    .update(message)
+    .digest('hex');
 
-  if (req.headers['x-zm-signature'] === signature) {
-
-    if (req.body.event === 'endpoint.url_validation') {
-      const hashForValidate = crypto.createHmac('sha256', process.env.ZOOM_WEBHOOK_SECRET_TOKEN).update(req.body.payload.plainToken).digest('hex')
-
-      const response = {
-        message: {
-          plainToken: req.body.payload.plainToken,
-          encryptedToken: hashForValidate
-        },
-        status: 200
-      }
-
-      console.log(response.message)
-      res.status(response.status).json(response.message)
-
-    } else {
-      const n8nWebhookUrl = process.env.N8N_WEBHOOK_URL
-      console.log('📦 URL de webhook n8n:', n8nWebhookUrl)
-
-      // Validar que la URL esté bien formada
-      try {
-        new URL(n8nWebhookUrl)
-      } catch (error) {
-        console.error('❌ URL inválida detectada:', n8nWebhookUrl)
-        return res.status(400).json({ message: 'URL de webhook de n8n inválida' })
-      }
-
-      try {
-        await axios({
-          method: 'post',
-          url: n8nWebhookUrl,
-          headers: { 'Content-Type': 'application/json' },
-          data: req.body
-        })
-        console.log('✅ Evento enviado a n8n con éxito')
-        res.status(200).json({ message: 'Evento recibido y reenviado a n8n' })
-      } catch (err) {
-        console.error('❌ Error enviando evento a n8n:', err.message)
-        res.status(500).json({ message: 'Error enviando evento a n8n' })
-      }
-    }
-
-  } else {
-    console.log('Unauthorized request to Zoom Webhook sample.')
-    res.status(401).json({ message: 'Unauthorized request to Zoom Webhook sample.' })
+  if (`v0=${hash}` !== req.headers['x-zm-signature']) {
+    console.error('❌ Firma inválida');
+    return res.status(401).send('Firma no válida');
   }
-})
 
-app.listen(port, () => console.log(`Zoom Webhook sample listening on port ${port}!`))
+  // 2. Validación inicial de Zoom
+  if (req.body.event === 'endpoint.url_validation') {
+    const responseToken = crypto.createHmac('sha256', process.env.ZOOM_WEBHOOK_SECRET_TOKEN)
+      .update(req.body.payload.plainToken)
+      .digest('hex');
 
+    return res.json({
+      plainToken: req.body.payload.plainToken,
+      encryptedToken: responseToken
+    });
+  }
+
+  // 3. Filtrar solo eventos de webinar terminado
+  if (req.body.event !== 'webinar.ended') {
+    return res.status(200).json({ message: 'Evento no procesado' });
+  }
+
+  // 4. Reenviar a n8n
+  const n8nUrl = process.env.N8N_WEBHOOK_URL;
+  
+  if (!n8nUrl) {
+    console.error('❌ URL de n8n no configurada');
+    return res.status(500).send('Error de configuración');
+  }
+
+  try {
+    console.log(`🔄 Enviando a n8n: ${n8nUrl}`);
+    
+    await axios.post(n8nUrl, {
+      zoomWebhook: req.body
+    }, {
+      headers: { 'Content-Type': 'application/json' },
+      timeout: 8000
+    });
+
+    console.log('✅ Evento enviado correctamente');
+    res.status(200).json({ success: true });
+
+  } catch (error) {
+    console.error('❌ Error al enviar a n8n:', error.message);
+    res.status(502).json({
+      error: 'Error al reenviar el webhook',
+      details: error.message
+    });
+  }
+});
+
+// Iniciar servidor
+app.listen(port, () => {
+  console.log(`🚀 Servidor escuchando en puerto ${port}`);
+});
