@@ -2,6 +2,7 @@ require('dotenv').config()
 const express = require('express')
 const bodyParser = require('body-parser')
 const crypto = require('crypto')
+const axios = require('axios') // <-- agregamos axios para llamadas HTTP
 
 const app = express()
 const port = process.env.PORT || 3000
@@ -13,8 +14,7 @@ app.get('/', (req, res) => {
   res.send(`Zoom Webhook sample successfully running. Set this URL with the /webhook path as your apps Event notification endpoint URL. https://github.com/zoom/webhook-sample`)
 })
 
-app.post('/webhook', (req, res) => {
-
+app.post('/webhook', async (req, res) => {  // async porque haremos await
   var response
 
   console.log(req.headers)
@@ -48,15 +48,20 @@ app.post('/webhook', (req, res) => {
       res.status(response.status)
       res.json(response.message)
     } else {
+      // Aquí enviamos el evento a n8n
+      try {
+        await axios.post(process.env.N8N_WEBHOOK_URL, req.body)
+        console.log('Evento enviado a n8n correctamente')
+      } catch (error) {
+        console.error('Error enviando evento a n8n:', error.message)
+      }
+
       response = { message: 'Authorized request to Zoom Webhook sample.', status: 200 }
 
       console.log(response.message)
 
       res.status(response.status)
       res.json(response)
-
-      // business logic here, example make API request to Zoom or 3rd party
-
     }
   } else {
 
