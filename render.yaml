@@ -2,7 +2,7 @@ services:
   - type: web
     name: Zoom Video SDK Auth Sample
     runtime: node
-    buildCommand: npm install
+    buildCommand: npm install express axios crypto dotenv
     startCommand: npm start
     repo: https://github.com/zoom/webhook-sample
     rootDir: .
