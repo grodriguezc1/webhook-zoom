@@ -1,59 +1,18 @@
-require('dotenv').config({ path: 'example.env' });
-const express = require('express');
-const crypto = require('crypto');
-const axios = require('axios');
+// ... (código anterior se mantiene igual hasta la función getAllParticipants)
 
-const app = express();
-const port = process.env.PORT || 3000;
-
-// Verificación de variables actualizada para OAuth
-if (!process.env.ZOOM_WEBHOOK_SECRET_TOKEN || 
-    !process.env.N8N_WEBHOOK_URL || 
-    !process.env.ZOOM_ACCOUNT_ID || 
-    !process.env.ZOOM_CLIENT_ID || 
-    !process.env.ZOOM_CLIENT_SECRET) {
-  console.error('❌ Error: Variables de entorno faltantes en example.env');
-  process.exit(1);
-}
-
-// Función para obtener token de acceso OAuth (sin cambios)
-async function getZoomAccessToken() {
-  try {
-    const credentials = Buffer.from(`${process.env.ZOOM_CLIENT_ID}:${process.env.ZOOM_CLIENT_SECRET}`).toString('base64');
-    
-    const response = await axios.post('https://zoom.us/oauth/token', null, {
-      params: {
-        grant_type: 'account_credentials',
-        account_id: process.env.ZOOM_ACCOUNT_ID
-      },
-      headers: {
-        'Authorization': `Basic ${credentials}`,
-        'Content-Type': 'application/x-www-form-urlencoded'
-      },
-      timeout: 10000
-    });
-
-    return response.data.access_token;
-  } catch (error) {
-    console.error('⚠️ Error obteniendo token OAuth:', error.response?.data || error.message);
-    throw error;
-  }
-}
-
-// Función para obtener participantes (sin cambios)
-async function getAllParticipants(webinarId) {
-  let allParticipants = [];
+// Nueva función para obtener registrados
+async function getRegistrants(webinarId) {
+  let allRegistrants = [];
   let nextPageToken = null;
   let pageCount = 0;
-  const baseUrl = `https://api.zoom.us/v2/report/webinars/${webinarId}/participants`;
+  const baseUrl = `https://api.zoom.us/v2/webinars/${webinarId}/registrants`;
 
-  // Obtener token de acceso
   const accessToken = await getZoomAccessToken();
-  console.log('🔑 Token OAuth obtenido');
+  console.log('🔑 Token OAuth obtenido para registrantes');
 
   do {
     pageCount++;
-    console.log(`📖 Obteniendo página ${pageCount} de participantes...`);
+    console.log(`📖 Obteniendo página ${pageCount} de registrados...`);
     
     try {
       const params = {
@@ -70,119 +29,83 @@ async function getAllParticipants(webinarId) {
         timeout: 10000
       });
 
-      allParticipants = [...allParticipants, ...response.data.participants];
+      allRegistrants = [...allRegistrants, ...response.data.registrants];
       nextPageToken = response.data.next_page_token || null;
       
-      console.log(`✅ Página ${pageCount} obtenida: ${response.data.participants.length} participantes`);
+      console.log(`✅ Página ${pageCount} obtenida: ${response.data.registrants.length} registrados`);
     } catch (error) {
-      console.error('⚠️ Error obteniendo participantes:', error.response?.data || error.message);
+      console.error('⚠️ Error obteniendo registrados:', error.response?.data || error.message);
       throw error;
     }
   } while (nextPageToken);
 
-  return allParticipants;
+  return allRegistrants;
 }
 
-// Middleware
-app.use(express.json());
+// ... (código anterior se mantiene igual hasta el handler del webhook)
 
-// Routes
-app.post('/webhook', async (req, res) => {
-  try {
-    console.log('📩 Evento recibido:', req.body.event);
-
-    // Validación de firma Zoom (existente)
-    const message = `v0:${req.headers['x-zm-request-timestamp']}:${JSON.stringify(req.body)}`;
-    const signature = `v0=${crypto.createHmac('sha256', process.env.ZOOM_WEBHOOK_SECRET_TOKEN)
-      .update(message)
-      .digest('hex')}`;
-
-    if (signature !== req.headers['x-zm-signature']) {
-      console.error('🚫 Firma inválida');
-      return res.status(401).json({ error: 'Firma no válida' });
-    }
-
-    // Validación inicial de Zoom (existente)
-    if (req.body.event === 'endpoint.url_validation') {
-      const responseToken = crypto.createHmac('sha256', process.env.ZOOM_WEBHOOK_SECRET_TOKEN)
-        .update(req.body.payload.plainToken)
-        .digest('hex');
-      
-      return res.json({
-        plainToken: req.body.payload.plainToken,
-        encryptedToken: responseToken
-      });
-    }
-
-    // Procesar solo webinar.ended (CORRECCIÓN AQUÍ)
     if (req.body.event === 'webinar.ended') {
-      // Responder inmediatamente a Zoom
       res.status(200).json({ success: true });
       
-      // Verificar estructura del payload
       if (!req.body.payload.object || !req.body.payload.object.id) {
-        console.error('❌ Estructura de payload inválida para webinar.ended');
-        console.error('Payload recibido:', JSON.stringify(req.body.payload, null, 2));
+        console.error('❌ Estructura de payload inválida');
         return;
       }
 
       const webinarInfo = req.body.payload.object;
       const webinarId = webinarInfo.id;
       
-      console.log('🔍 Obteniendo participantes para webinar:', webinarId);
-      
       try {
-        // Obtener todos los participantes
-        const participants = await getAllParticipants(webinarId);
-        console.log(`👥 Total de participantes obtenidos: ${participants.length}`);
+        // Obtener ambos conjuntos de datos en paralelo
+        const [participants, registrants] = await Promise.all([
+          getAllParticipants(webinarId),
+          getRegistrants(webinarId)
+        ]);
 
-        // Construir payload para n8n
+        console.log(`📊 Estadísticas:
+        👥 Participantes: ${participants.length}
+        📝 Registrados: ${registrants.length}`);
+
+        // Encontrar registrados que no asistieron
+        const attendedEmails = new Set(participants.map(p => p.email?.toLowerCase()));
+        const noShows = registrants.filter(
+          r => !attendedEmails.has(r.email?.toLowerCase())
+        );
+
+        // Construir payload completo
         const payloadToN8N = {
           event: 'webinar.ended',
           payload: {
-            id: webinarId,
-            uuid: webinarInfo.uuid,
-            topic: webinarInfo.topic,
-            start_time: webinarInfo.start_time,
-            end_time: webinarInfo.end_time,
-            duration: webinarInfo.duration,
-            participants: participants
+            webinar_info: {
+              id: webinarId,
+              topic: webinarInfo.topic,
+              start_time: webinarInfo.start_time,
+              end_time: webinarInfo.end_time
+            },
+            statistics: {
+              total_participants: participants.length,
+              total_registrants: registrants.length,
+              attendance_rate: registrants.length > 0 
+                ? (participants.length / registrants.length * 100).toFixed(2) + '%'
+                : '0%'
+            },
+            participants: participants,
+            registrants: registrants,
+            no_shows: noShows
           }
         };
 
-        console.log(`🔄 Enviando ${participants.length} participantes a n8n...`);
+        console.log(`🔄 Enviando datos completos a n8n...`);
         await axios.post(process.env.N8N_WEBHOOK_URL, payloadToN8N, {
           headers: { 'Content-Type': 'application/json' },
           timeout: 30000
         });
         
-        console.log('✅ Datos enviados exitosamente a n8n');
+        console.log('✅ Todos los datos enviados exitosamente');
       } catch (error) {
-        console.error('⚠️ Error procesando participantes:', error.message);
+        console.error('⚠️ Error:', error.message);
       }
-      
       return;
     }
 
-    res.status(200).end(); // Respuesta para otros eventos
-
-  } catch (error) {
-    console.error('🔥 Error crítico:', error.message);
-    const statusCode = error.response?.status || 500;
-    res.status(statusCode).json({
-      error: 'Error en el servidor',
-      details: error.message,
-      ...(error.response && { responseData: error.response.data })
-    });
-  }
-});
-
-// Iniciar servidor
-app.listen(port, () => {
-  console.log(`
-  🚀 Servidor activo en puerto ${port}
-  📌 Variables cargadas desde example.env
-  🔗 Endpoint n8n: ${process.env.N8N_WEBHOOK_URL}
-  🔑 Zoom OAuth usando Account ID: ${process.env.ZOOM_ACCOUNT_ID}
-  `);
-});
+// ... (resto del código se mantiene igual)
