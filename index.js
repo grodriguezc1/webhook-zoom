@@ -51,12 +51,14 @@ app.post('/webhook', async (req, res) => {  // async porque haremos await
       const n8nWebhookUrl = process.env.N8N_WEBHOOK_URL;
 
       try {
-        await axios.post(n8nWebhookUrl, req.body); // <-- ENVÍA TODO el body como está
-        console.log('✅ Evento enviado a n8n con éxito');
-        res.status(200).json({ message: 'Evento recibido y reenviado a n8n' });
-      } catch (err) {
-        console.error('❌ Error enviando evento a n8n:', err.message);
-        res.status(500).json({ message: 'Error enviando evento a n8n' });
+await axios({
+  method: 'post',
+  url: process.env.N8N_WEBHOOK_URL,
+  headers: {
+    'Content-Type': 'application/json'
+  },
+  data: req.body
+});
       }
     }
   } else {
