@@ -1,63 +1,14 @@
-require('dotenv').config();
-const http = require('http');
-const express = require('express');
-const crypto = require('crypto');
-const axios = require('axios'); // Para forwarding a n8n
-
-const app = express();
-
-// Middleware para body raw (arregla SyntaxError)
-app.use(express.json({
-  verify: (req, res, buf) => {
-    req.rawBody = buf; // Guarda body crudo para validación
+{
+  "name": "webhook-zoom",
+  "description": "Receive Zoom webhooks.",
+  "repository": "https://github.com/grodriguezc1/webhook-zoom",
+  "logo": "https://avatars1.githubusercontent.com/u/29114944?s=200&v=4",
+  "keywords": ["zoom", "webhook", "node.js", "express"],
+  "env": {
+    "ZOOM_WEBHOOK_SECRET_TOKEN": {
+      "description": "Your Zoom Webhook Secret Token, found on your App's Features page",
+      "value": "",
+      "required": true
+    }
   }
-}));
-
-app.post('/webhook', (req, res) => {
-  console.log('📩 Evento recibido:', req.body.event || 'desconocido');
-  console.log('Raw Body:', req.rawBody.toString()); // Depura body para ver errores
-
-  // Validación de firma Zoom
-  const signature = req.headers['x-zm-signature'];
-  const ts = req.headers['x-zm-request-timestamp'];
-  if (!signature || !ts) {
-    console.log('🚫 Headers faltantes');
-    return res.status(400).send('Headers inválidos');
-  }
-
-  const msg = `v0:${ts}:${req.rawBody.toString()}`;
-  const hash = crypto.createHmac('sha256', process.env.ZOOM_WEBHOOK_SECRET_TOKEN).update(msg).digest('hex');
-  const computedSig = `v0=${hash}`;
-
-  if (signature !== computedSig) {
-    console.log('🚫 Firma no válida');
-    return res.status(401).send('Firma inválida');
-  }
-
-  // Manejo de validación URL
-  if (req.body.event === 'endpoint.url_validation') {
-    const plainToken = req.body.payload.plainToken;
-    const encryptedToken = crypto.createHmac('sha256', process.env.ZOOM_WEBHOOK_SECRET_TOKEN).update(plainToken).digest('hex');
-    return res.json({ plainToken, encryptedToken });
-  }
-
-  // Manejo de eventos (forward a n8n)
-  const event = req.body.event;
-  if (event === 'webinar.started' || event === 'webinar.ended') {
-    console.log('Payload:', req.body.payload);
-    
-    // Forward a n8n
-    axios.post(process.env.N8N_WEBHOOK_URL, req.body)
-      .then(() => console.log('✅ Enviado a n8n'))
-      .catch(err => console.error('❌ Error al enviar a n8n:', err.message));
-  }
-
-  res.sendStatus(200); // Siempre responde 200 para Zoom
-});
-
-const port = process.env.PORT || 4000;
-app.listen(port, () => {
-  console.log(`🚀 Servidor escuchando en puerto ${port}`);
-  console.log('🔗 Endpoint: /webhook');
-  console.log('🧠 Maneja eventos: webinar.started, webinar.ended');
-});
+}
