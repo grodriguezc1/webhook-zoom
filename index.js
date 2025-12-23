@@ -666,6 +666,179 @@ app.get('/health', (req, res) => {
   res.json({ ok: true });
 });
 
+ * GET /zoom/meetings
+ * Lista SOLO reuniones FUTURAS (programadas)
+ */
+app.get('/zoom/meetings', async (req, res) => {
+  try {
+    const accessToken = await getZoomAccessToken();
+    
+    const response = await axios.get('https://api.zoom.us/v2/users/me/meetings', {
+      params: {
+        type: 'upcoming',  // 👈 SOLO FUTURAS
+        page_size: 30
+      },
+      headers: { 'Authorization': `Bearer ${accessToken}` },
+      timeout: 10000
+    });
+
+    // Filtrar adicional: solo fechas futuras
+    const ahora = new Date();
+    const futuras = (response.data.meetings || []).filter(m => {
+      return new Date(m.start_time) > ahora;
+    });
+
+    res.json({
+      success: true,
+      meetings: futuras,
+      total: futuras.length
+    });
+
+  } catch (error) {
+    console.error('❌ [ZOOM] Error listando reuniones:', error.message);
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+/**
+ * GET /zoom/webinars
+ * Lista SOLO webinars FUTUROS (programados)
+ */
+app.get('/zoom/webinars', async (req, res) => {
+  try {
+    const accessToken = await getZoomAccessToken();
+
+    const response = await axios.get('https://api.zoom.us/v2/users/me/webinars', {
+      params: {
+        type: 'upcoming',  // 👈 SOLO FUTUROS
+        page_size: 30
+      },
+      headers: { 'Authorization': `Bearer ${accessToken}` },
+      timeout: 10000
+    });
+
+    // Filtrar adicional: solo fechas futuras
+    const ahora = new Date();
+    const futuros = (response.data.webinars || []).filter(w => {
+      return new Date(w.start_time) > ahora;
+    });
+
+    res.json({
+      success: true,
+      webinars: futuros,
+      total: futuros.length
+    });
+
+  } catch (error) {
+    console.error('❌ [ZOOM] Error listando webinars:', error.message);
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+/**
+ * POST /zoom/webinars
+ * Crear un nuevo webinar
+ */
+app.post('/zoom/webinars', async (req, res) => {
+  try {
+    const { topic, start_time, duration, agenda } = req.body;
+    const accessToken = await getZoomAccessToken();
+
+    const response = await axios.post('https://api.zoom.us/v2/users/me/webinars', {
+      topic: topic || 'Nuevo Webinar',
+      type: 5, // Webinar programado
+      start_time: start_time,
+      duration: duration || 90,
+      timezone: 'America/Santiago',
+      agenda: agenda || '',
+      settings: {
+        host_video: true,
+        panelists_video: true,
+        approval_type: 0, // Automático
+        registration_type: 1,
+        audio: 'both',
+        auto_recording: 'cloud',
+        enforce_login: false,
+        close_registration: false,
+        show_share_button: true,
+        allow_multiple_devices: true
+      }
+    }, {
+      headers: {
+        'Authorization': `Bearer ${accessToken}`,
+        'Content-Type': 'application/json'
+      },
+      timeout: 15000
+    });
+
+    console.log(`✅ [ZOOM] Webinar creado: ${response.data.id}`);
+
+    res.json({
+      success: true,
+      webinar: response.data
+    });
+
+  } catch (error) {
+    console.error('❌ [ZOOM] Error creando webinar:', error.response?.data || error.message);
+    res.status(500).json({ 
+      success: false, 
+      error: error.response?.data?.message || error.message 
+    });
+  }
+});
+
+/**
+ * GET /zoom/webinars/:id
+ * Obtener detalles de un webinar específico
+ */
+app.get('/zoom/webinars/:id', async (req, res) => {
+  try {
+    const { id } = req.params;
+    const accessToken = await getZoomAccessToken();
+
+    const response = await axios.get(`https://api.zoom.us/v2/webinars/${id}`, {
+      headers: { 'Authorization': `Bearer ${accessToken}` },
+      timeout: 10000
+    });
+
+    res.json({
+      success: true,
+      webinar: response.data
+    });
+
+  } catch (error) {
+    console.error('❌ [ZOOM] Error obteniendo webinar:', error.message);
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+/**
+ * DELETE /zoom/webinars/:id
+ * Eliminar un webinar
+ */
+app.delete('/zoom/webinars/:id', async (req, res) => {
+  try {
+    const { id } = req.params;
+    const accessToken = await getZoomAccessToken();
+
+    await axios.delete(`https://api.zoom.us/v2/webinars/${id}`, {
+      headers: { 'Authorization': `Bearer ${accessToken}` },
+      timeout: 10000
+    });
+
+    console.log(`✅ [ZOOM] Webinar ${id} eliminado`);
+
+    res.json({
+      success: true,
+      message: 'Webinar eliminado'
+    });
+
+  } catch (error) {
+    console.error('❌ [ZOOM] Error eliminando webinar:', error.message);
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
 // ============================================================
 // INICIAR SERVIDOR
 // ============================================================
