@@ -666,6 +666,7 @@ app.get('/health', (req, res) => {
   res.json({ ok: true });
 });
 
+/**
  * GET /zoom/meetings
  * Lista SOLO reuniones FUTURAS (programadas)
  */
