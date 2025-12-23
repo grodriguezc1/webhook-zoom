@@ -8,23 +8,41 @@ const port = process.env.PORT || 3000;
 
 app.use(express.json());
 
-// Verificación de variables
-if (!process.env.ZOOM_WEBHOOK_SECRET_TOKEN ||
-    !process.env.ZOOM_ACCOUNT_ID ||
-    !process.env.ZOOM_CLIENT_ID ||
-    !process.env.ZOOM_CLIENT_SECRET ||
-    !process.env.N8N_WEBHOOK_URL ||
-    !process.env.N8N_WEBHOOK_URL_START) {
-  console.error('❌ Variables de entorno faltantes');
+// ============================================================
+// VERIFICACIÓN DE VARIABLES DE ENTORNO
+// ============================================================
+const requiredVars = [
+  'ZOOM_WEBHOOK_SECRET_TOKEN',
+  'ZOOM_ACCOUNT_ID',
+  'ZOOM_CLIENT_ID',
+  'ZOOM_CLIENT_SECRET',
+  'N8N_WEBHOOK_URL',
+  'N8N_WEBHOOK_URL_START'
+];
+
+// Variables opcionales para WhatsApp
+const optionalVars = [
+  'N8N_WEBHOOK_WHATSAPP',      // Webhook de n8n para procesar comandos WhatsApp
+  'WHATSAPP_API_URL'           // URL de tu whatsapp-web.js para enviar mensajes
+];
+
+const missingVars = requiredVars.filter(v => !process.env[v]);
+if (missingVars.length > 0) {
+  console.error('❌ Variables de entorno faltantes:', missingVars.join(', '));
   process.exit(1);
 }
 
+// ============================================================
+// FUNCIONES ZOOM API
+// ============================================================
+
 // Obtener token OAuth
 async function getZoomAccessToken() {
-  const credentials = Buffer.from(`${process.env.ZOOM_CLIENT_ID}:${process.env.ZOOM_CLIENT_SECRET}`).toString('base64');
-  const url = 'https://zoom.us/oauth/token';
+  const credentials = Buffer.from(
+    `${process.env.ZOOM_CLIENT_ID}:${process.env.ZOOM_CLIENT_SECRET}`
+  ).toString('base64');
 
-  const response = await axios.post(url, null, {
+  const response = await axios.post('https://zoom.us/oauth/token', null, {
     params: {
       grant_type: 'account_credentials',
       account_id: process.env.ZOOM_ACCOUNT_ID
@@ -39,7 +57,7 @@ async function getZoomAccessToken() {
   return response.data.access_token;
 }
 
-// Obtener participantes
+// Obtener participantes de webinar
 async function getAllParticipants(webinarId) {
   const accessToken = await getZoomAccessToken();
   const baseUrl = `https://api.zoom.us/v2/report/webinars/${webinarId}/participants`;
@@ -51,9 +69,7 @@ async function getAllParticipants(webinarId) {
         page_size: 300,
         ...(token && { next_page_token: token })
       },
-      headers: {
-        'Authorization': `Bearer ${accessToken}`
-      },
+      headers: { 'Authorization': `Bearer ${accessToken}` },
       timeout: 10000
     });
     all = [...all, ...response.data.participants];
@@ -63,7 +79,7 @@ async function getAllParticipants(webinarId) {
   return all;
 }
 
-// Obtener registrados
+// Obtener registrados de webinar
 async function getRegistrants(webinarId) {
   const accessToken = await getZoomAccessToken();
   const baseUrl = `https://api.zoom.us/v2/webinars/${webinarId}/registrants`;
@@ -76,9 +92,7 @@ async function getRegistrants(webinarId) {
         status: 'approved',
         ...(token && { next_page_token: token })
       },
-      headers: {
-        'Authorization': `Bearer ${accessToken}`
-      },
+      headers: { 'Authorization': `Bearer ${accessToken}` },
       timeout: 10000
     });
     all = [...all, ...response.data.registrants];
@@ -88,11 +102,13 @@ async function getRegistrants(webinarId) {
   return all;
 }
 
-// Webhook
+// ============================================================
+// WEBHOOK ZOOM (TU CÓDIGO EXISTENTE)
+// ============================================================
 app.post('/webhook', async (req, res) => {
   try {
     const event = req.body.event;
-    console.log(`📩 Evento recibido: ${event}`);
+    console.log(`📩 [ZOOM] Evento recibido: ${event}`);
 
     // Validación firma
     const msg = `v0:${req.headers['x-zm-request-timestamp']}:${JSON.stringify(req.body)}`;
@@ -224,11 +240,461 @@ app.post('/webhook', async (req, res) => {
   }
 });
 
-// Servidor
+// ============================================================
+// 🆕 ENDPOINTS WHATSAPP - ZOOM MASTER CONTROL
+// ============================================================
+
+/**
+ * POST /whatsapp/incoming
+ * 
+ * Recibe mensajes de tu servidor whatsapp-web.js y los envía a n8n
+ * para procesarlos con el sistema de comandos Zoom
+ * 
+ * Body esperado:
+ * {
+ *   "from": "5212345678@c.us",
+ *   "message": "/ayuda",
+ *   "timestamp": 1234567890 (opcional),
+ *   "type": "chat" (opcional)
+ * }
+ */
+app.post('/whatsapp/incoming', async (req, res) => {
+  try {
+    const { from, message, timestamp, type } = req.body;
+
+    // Validar datos requeridos
+    if (!from || !message) {
+      return res.status(400).json({
+        success: false,
+        error: 'Faltan parámetros requeridos: from, message'
+      });
+    }
+
+    console.log(`📱 [WHATSAPP] Mensaje de ${from}: ${message}`);
+
+    // Verificar que esté configurado el webhook de n8n para WhatsApp
+    if (!process.env.N8N_WEBHOOK_WHATSAPP) {
+      console.error('❌ N8N_WEBHOOK_WHATSAPP no configurado');
+      return res.status(500).json({
+        success: false,
+        error: 'Webhook de n8n para WhatsApp no configurado'
+      });
+    }
+
+    // Preparar payload para n8n
+    const payloadToN8n = {
+      from: from,
+      message: message,
+      timestamp: timestamp || Date.now(),
+      type: type || 'chat',
+      metadata: {
+        received_at: new Date().toISOString(),
+        source: 'WhatsApp via Webhook Processor'
+      }
+    };
+
+    // Enviar a n8n para procesar el comando
+    const response = await axios.post(process.env.N8N_WEBHOOK_WHATSAPP, payloadToN8n, {
+      headers: { 'Content-Type': 'application/json' },
+      timeout: 30000
+    });
+
+    console.log('✅ [WHATSAPP] Mensaje enviado a n8n');
+
+    res.json({
+      success: true,
+      message: 'Mensaje procesado',
+      n8n_response: response.data
+    });
+
+  } catch (error) {
+    console.error('❌ [WHATSAPP] Error:', error.message);
+    res.status(500).json({
+      success: false,
+      error: error.message
+    });
+  }
+});
+
+/**
+ * POST /whatsapp/send
+ * 
+ * Recibe solicitudes de n8n para enviar mensajes a WhatsApp
+ * y las reenvía a tu servidor whatsapp-web.js
+ * 
+ * Body esperado:
+ * {
+ *   "to": "5212345678@c.us",
+ *   "message": "Texto del mensaje"
+ * }
+ */
+app.post('/whatsapp/send', async (req, res) => {
+  try {
+    const { to, message } = req.body;
+
+    // Validar datos requeridos
+    if (!to || !message) {
+      return res.status(400).json({
+        success: false,
+        error: 'Faltan parámetros requeridos: to, message'
+      });
+    }
+
+    console.log(`📤 [WHATSAPP] Enviando a ${to}: ${message.substring(0, 50)}...`);
+
+    // Verificar que esté configurada la URL de WhatsApp
+    if (!process.env.WHATSAPP_API_URL) {
+      console.error('❌ WHATSAPP_API_URL no configurado');
+      return res.status(500).json({
+        success: false,
+        error: 'URL de WhatsApp API no configurada'
+      });
+    }
+
+    // Enviar mensaje a whatsapp-web.js
+    const response = await axios.post(process.env.WHATSAPP_API_URL, {
+      to: to,
+      message: message
+    }, {
+      headers: { 'Content-Type': 'application/json' },
+      timeout: 15000
+    });
+
+    console.log('✅ [WHATSAPP] Mensaje enviado');
+
+    res.json({
+      success: true,
+      message: 'Mensaje enviado a WhatsApp'
+    });
+
+  } catch (error) {
+    console.error('❌ [WHATSAPP] Error enviando:', error.message);
+    res.status(500).json({
+      success: false,
+      error: error.message
+    });
+  }
+});
+
+// ============================================================
+// 🆕 ENDPOINTS ZOOM API DIRECTOS (para llamadas desde n8n)
+// ============================================================
+
+/**
+ * GET /zoom/meetings
+ * Lista reuniones programadas
+ */
+app.get('/zoom/meetings', async (req, res) => {
+  try {
+    const accessToken = await getZoomAccessToken();
+    
+    const response = await axios.get('https://api.zoom.us/v2/users/me/meetings', {
+      params: {
+        type: 'scheduled',
+        page_size: 30
+      },
+      headers: { 'Authorization': `Bearer ${accessToken}` },
+      timeout: 10000
+    });
+
+    res.json({
+      success: true,
+      meetings: response.data.meetings,
+      total: response.data.total_records
+    });
+
+  } catch (error) {
+    console.error('❌ [ZOOM] Error listando reuniones:', error.message);
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+/**
+ * POST /zoom/meetings
+ * Crear nueva reunión
+ * 
+ * Body:
+ * {
+ *   "topic": "Mi reunión",
+ *   "start_time": "2024-12-25T10:00:00",
+ *   "duration": 60,
+ *   "timezone": "America/Mexico_City"
+ * }
+ */
+app.post('/zoom/meetings', async (req, res) => {
+  try {
+    const { topic, start_time, duration, timezone } = req.body;
+    const accessToken = await getZoomAccessToken();
+
+    const response = await axios.post('https://api.zoom.us/v2/users/me/meetings', {
+      topic: topic || 'Nueva Reunión',
+      type: 2, // Scheduled
+      start_time: start_time,
+      duration: duration || 60,
+      timezone: timezone || 'America/Mexico_City',
+      settings: {
+        host_video: true,
+        participant_video: true,
+        waiting_room: true,
+        auto_recording: 'cloud'
+      }
+    }, {
+      headers: {
+        'Authorization': `Bearer ${accessToken}`,
+        'Content-Type': 'application/json'
+      },
+      timeout: 10000
+    });
+
+    console.log(`✅ [ZOOM] Reunión creada: ${response.data.id}`);
+
+    res.json({
+      success: true,
+      meeting: response.data
+    });
+
+  } catch (error) {
+    console.error('❌ [ZOOM] Error creando reunión:', error.message);
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+/**
+ * GET /zoom/meetings/:id
+ * Obtener detalles de una reunión
+ */
+app.get('/zoom/meetings/:id', async (req, res) => {
+  try {
+    const { id } = req.params;
+    const accessToken = await getZoomAccessToken();
+
+    const response = await axios.get(`https://api.zoom.us/v2/meetings/${id}`, {
+      headers: { 'Authorization': `Bearer ${accessToken}` },
+      timeout: 10000
+    });
+
+    res.json({
+      success: true,
+      meeting: response.data
+    });
+
+  } catch (error) {
+    console.error('❌ [ZOOM] Error obteniendo reunión:', error.message);
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+/**
+ * PATCH /zoom/meetings/:id
+ * Modificar una reunión
+ */
+app.patch('/zoom/meetings/:id', async (req, res) => {
+  try {
+    const { id } = req.params;
+    const accessToken = await getZoomAccessToken();
+
+    await axios.patch(`https://api.zoom.us/v2/meetings/${id}`, req.body, {
+      headers: {
+        'Authorization': `Bearer ${accessToken}`,
+        'Content-Type': 'application/json'
+      },
+      timeout: 10000
+    });
+
+    console.log(`✅ [ZOOM] Reunión ${id} modificada`);
+
+    res.json({
+      success: true,
+      message: 'Reunión actualizada'
+    });
+
+  } catch (error) {
+    console.error('❌ [ZOOM] Error modificando reunión:', error.message);
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+/**
+ * DELETE /zoom/meetings/:id
+ * Eliminar una reunión
+ */
+app.delete('/zoom/meetings/:id', async (req, res) => {
+  try {
+    const { id } = req.params;
+    const accessToken = await getZoomAccessToken();
+
+    await axios.delete(`https://api.zoom.us/v2/meetings/${id}`, {
+      headers: { 'Authorization': `Bearer ${accessToken}` },
+      timeout: 10000
+    });
+
+    console.log(`✅ [ZOOM] Reunión ${id} eliminada`);
+
+    res.json({
+      success: true,
+      message: 'Reunión eliminada'
+    });
+
+  } catch (error) {
+    console.error('❌ [ZOOM] Error eliminando reunión:', error.message);
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+/**
+ * GET /zoom/webinars
+ * Lista webinars programados
+ */
+app.get('/zoom/webinars', async (req, res) => {
+  try {
+    const accessToken = await getZoomAccessToken();
+
+    const response = await axios.get('https://api.zoom.us/v2/users/me/webinars', {
+      params: { page_size: 30 },
+      headers: { 'Authorization': `Bearer ${accessToken}` },
+      timeout: 10000
+    });
+
+    res.json({
+      success: true,
+      webinars: response.data.webinars,
+      total: response.data.total_records
+    });
+
+  } catch (error) {
+    console.error('❌ [ZOOM] Error listando webinars:', error.message);
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+/**
+ * GET /zoom/recordings
+ * Lista grabaciones recientes (últimos 30 días)
+ */
+app.get('/zoom/recordings', async (req, res) => {
+  try {
+    const accessToken = await getZoomAccessToken();
+    
+    // Últimos 30 días
+    const to = new Date().toISOString().split('T')[0];
+    const fromDate = new Date();
+    fromDate.setDate(fromDate.getDate() - 30);
+    const from = fromDate.toISOString().split('T')[0];
+
+    const response = await axios.get('https://api.zoom.us/v2/users/me/recordings', {
+      params: {
+        from: from,
+        to: to,
+        page_size: 30
+      },
+      headers: { 'Authorization': `Bearer ${accessToken}` },
+      timeout: 10000
+    });
+
+    res.json({
+      success: true,
+      meetings: response.data.meetings,
+      total: response.data.total_records
+    });
+
+  } catch (error) {
+    console.error('❌ [ZOOM] Error listando grabaciones:', error.message);
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+/**
+ * GET /zoom/recordings/:id
+ * Obtener grabaciones de una reunión específica
+ */
+app.get('/zoom/recordings/:id', async (req, res) => {
+  try {
+    const { id } = req.params;
+    const accessToken = await getZoomAccessToken();
+
+    const response = await axios.get(`https://api.zoom.us/v2/meetings/${id}/recordings`, {
+      headers: { 'Authorization': `Bearer ${accessToken}` },
+      timeout: 10000
+    });
+
+    res.json({
+      success: true,
+      recording: response.data
+    });
+
+  } catch (error) {
+    console.error('❌ [ZOOM] Error obteniendo grabación:', error.message);
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+// ============================================================
+// ENDPOINTS DE UTILIDAD
+// ============================================================
+
+/**
+ * GET /status
+ * Estado del servidor y configuración
+ */
+app.get('/status', (req, res) => {
+  res.json({
+    status: 'running',
+    version: '2.0.0',
+    endpoints: {
+      zoom_webhook: '/webhook',
+      whatsapp_incoming: '/whatsapp/incoming',
+      whatsapp_send: '/whatsapp/send',
+      zoom_meetings: '/zoom/meetings',
+      zoom_webinars: '/zoom/webinars',
+      zoom_recordings: '/zoom/recordings'
+    },
+    config: {
+      zoom_configured: !!process.env.ZOOM_CLIENT_ID,
+      n8n_webhook_configured: !!process.env.N8N_WEBHOOK_URL,
+      n8n_whatsapp_configured: !!process.env.N8N_WEBHOOK_WHATSAPP,
+      whatsapp_api_configured: !!process.env.WHATSAPP_API_URL
+    },
+    timestamp: new Date().toISOString()
+  });
+});
+
+/**
+ * GET /health
+ * Health check simple
+ */
+app.get('/health', (req, res) => {
+  res.json({ ok: true });
+});
+
+// ============================================================
+// INICIAR SERVIDOR
+// ============================================================
 app.listen(port, () => {
   console.log(`
-🚀 Servidor escuchando en puerto ${port}
-🔗 Endpoint: /webhook
-🧠 Maneja eventos: webinar.started, webinar.ended
-`);
+╔══════════════════════════════════════════════════════════════╗
+║         🚀 ZOOM WEBHOOK PROCESSOR + WHATSAPP                 ║
+╠══════════════════════════════════════════════════════════════╣
+║  Puerto: ${port}                                               ║
+║                                                              ║
+║  📍 ENDPOINTS ZOOM:                                          ║
+║     POST /webhook              - Eventos de Zoom             ║
+║     GET  /zoom/meetings        - Listar reuniones            ║
+║     POST /zoom/meetings        - Crear reunión               ║
+║     GET  /zoom/meetings/:id    - Ver reunión                 ║
+║     PATCH /zoom/meetings/:id   - Modificar reunión           ║
+║     DELETE /zoom/meetings/:id  - Eliminar reunión            ║
+║     GET  /zoom/webinars        - Listar webinars             ║
+║     GET  /zoom/recordings      - Listar grabaciones          ║
+║     GET  /zoom/recordings/:id  - Ver grabación               ║
+║                                                              ║
+║  📱 ENDPOINTS WHATSAPP:                                      ║
+║     POST /whatsapp/incoming    - Recibir de WhatsApp         ║
+║     POST /whatsapp/send        - Enviar a WhatsApp           ║
+║                                                              ║
+║  🔧 UTILIDADES:                                              ║
+║     GET /status                - Estado del servidor         ║
+║     GET /health                - Health check                ║
+║                                                              ║
+╚══════════════════════════════════════════════════════════════╝
+  `);
 });
