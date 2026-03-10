@@ -17,7 +17,8 @@ const requiredVars = [
   'ZOOM_CLIENT_ID',
   'ZOOM_CLIENT_SECRET',
   'N8N_WEBHOOK_URL',
-  'N8N_WEBHOOK_URL_START'
+  'N8N_WEBHOOK_URL_START',
+  'N8N_WEBHOOK_URL_RECORDING'
 ];
 
 // Variables opcionales para WhatsApp
@@ -221,6 +222,66 @@ app.post('/webhook', async (req, res) => {
         console.log('✅ Datos enviados correctamente');
       } catch (error) {
         console.error('❌ Error procesando webinar.ended:', error.message);
+      }
+
+      return;
+    }
+
+
+    // Evento: grabacion completada (recording.completed)
+    if (event === 'recording.completed') {
+      res.status(200).json({ success: true });
+
+      const data = req.body.payload?.object;
+      if (!data || !data.id) {
+        console.error('Payload invalido (recording.completed)');
+        return;
+      }
+
+      try {
+        const recordingFiles = (data.recording_files || []).map(file => ({
+          id: file.id,
+          file_type: file.file_type,
+          file_extension: file.file_extension,
+          file_size: file.file_size,
+          play_url: file.play_url,
+          download_url: file.download_url,
+          status: file.status,
+          recording_start: file.recording_start,
+          recording_end: file.recording_end,
+          recording_type: file.recording_type
+        }));
+
+        const payloadToN8n = {
+          event: 'recording.completed',
+          meeting_id: data.id,
+          meeting_uuid: data.uuid,
+          host_id: data.host_id,
+          host_email: data.host_email,
+          topic: data.topic,
+          type: data.type,
+          start_time: data.start_time,
+          duration: data.duration,
+          total_size: data.total_size,
+          recording_count: data.recording_count,
+          share_url: data.share_url,
+          recording_play_passcode: data.recording_play_passcode || null,
+          recording_files: recordingFiles,
+          download_token: req.body.download_token || null,
+          metadata: {
+            generated_at: new Date().toISOString(),
+            source: 'Zoom Webhook Processor'
+          }
+        };
+
+        console.log(`Recording completed: ${data.topic} (${recordingFiles.length} files)`);
+        await axios.post(process.env.N8N_WEBHOOK_URL_RECORDING, payloadToN8n, {
+          headers: { 'Content-Type': 'application/json' },
+          timeout: 30000
+        });
+        console.log('Recording data sent to n8n');
+      } catch (error) {
+        console.error('Error processing recording.completed:', error.message);
       }
 
       return;
@@ -646,12 +707,14 @@ app.get('/status', (req, res) => {
       whatsapp_send: '/whatsapp/send',
       zoom_meetings: '/zoom/meetings',
       zoom_webinars: '/zoom/webinars',
-      zoom_recordings: '/zoom/recordings'
+      zoom_recordings: '/zoom/recordings',
+      recording_completed: '/webhook (event: recording.completed)'
     },
     config: {
       zoom_configured: !!process.env.ZOOM_CLIENT_ID,
       n8n_webhook_configured: !!process.env.N8N_WEBHOOK_URL,
       n8n_whatsapp_configured: !!process.env.N8N_WEBHOOK_WHATSAPP,
+      n8n_recording_configured: !!process.env.N8N_WEBHOOK_URL_RECORDING,
       whatsapp_api_configured: !!process.env.WHATSAPP_API_URL
     },
     timestamp: new Date().toISOString()
