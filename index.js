@@ -252,6 +252,27 @@ app.post('/webhook', async (req, res) => {
           recording_type: file.recording_type
         }));
 
+        // Obtener share URL y password limpios desde la API de Zoom
+        let shareUrl = data.share_url;
+        let sharePassword = data.recording_play_passcode || null;
+        try {
+          const accessToken = await getZoomAccessToken();
+          // El UUID necesita doble encoding si contiene / o //
+          const encodedUuid = encodeURIComponent(encodeURIComponent(data.uuid));
+          const settingsRes = await axios.get(
+            `https://api.zoom.us/v2/meetings/${encodedUuid}/recordings/settings`,
+            {
+              headers: { 'Authorization': `Bearer ${accessToken}` },
+              timeout: 10000
+            }
+          );
+          if (settingsRes.data.share_url) shareUrl = settingsRes.data.share_url;
+          if (settingsRes.data.password) sharePassword = settingsRes.data.password;
+          console.log('✅ Share URL y password obtenidos desde API');
+        } catch (settingsErr) {
+          console.error('⚠️ No se pudo obtener settings, usando datos del webhook:', settingsErr.message);
+        }
+
         const payloadToN8n = {
           event: 'recording.completed',
           meeting_id: data.id,
@@ -264,8 +285,8 @@ app.post('/webhook', async (req, res) => {
           duration: data.duration,
           total_size: data.total_size,
           recording_count: data.recording_count,
-          share_url: data.share_url,
-          recording_play_passcode: data.recording_play_passcode || null,
+          share_url: shareUrl,
+          share_password: sharePassword,
           recording_files: recordingFiles,
           download_token: req.body.download_token || null,
           metadata: {
@@ -279,7 +300,7 @@ app.post('/webhook', async (req, res) => {
           headers: { 'Content-Type': 'application/json' },
           timeout: 30000
         });
-        console.log('Recording data sent to n8n');
+        console.log('✅ Recording data sent to n8n');
       } catch (error) {
         console.error('Error processing recording.completed:', error.message);
       }
