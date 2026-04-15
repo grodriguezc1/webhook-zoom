@@ -323,6 +323,194 @@ app.post('/webhook', async (req, res) => {
 });
 
 // ============================================================
+// WEBHOOK ZOOM AGENTE (General App - OAuth)
+// Endpoint separado para la cuenta Agente
+// ============================================================
+app.post('/webhook-agent', async (req, res) => {
+  try {
+    const event = req.body.event;
+    console.log(`📩 [ZOOM-AGENTE] Evento recibido: ${event}`);
+
+    // Validacion firma con Secret Token del Agente
+    const agentSecret = process.env.ZOOM_AGENT_WEBHOOK_SECRET_TOKEN;
+    if (!agentSecret) {
+      console.error('ZOOM_AGENT_WEBHOOK_SECRET_TOKEN no configurado');
+      return res.status(500).json({ error: 'Agent secret not configured' });
+    }
+
+    const msg = `v0:${req.headers['x-zm-request-timestamp']}:${JSON.stringify(req.body)}`;
+    const expected = `v0=${crypto.createHmac('sha256', agentSecret).update(msg).digest('hex')}`;
+    if (req.headers['x-zm-signature'] !== expected) {
+      console.error('[ZOOM-AGENTE] Firma no valida');
+      return res.status(401).json({ error: 'Firma invalida' });
+    }
+
+    // Validacion inicial Zoom
+    if (event === 'endpoint.url_validation') {
+      const token = crypto.createHmac('sha256', agentSecret)
+        .update(req.body.payload.plainToken)
+        .digest('hex');
+      return res.json({
+        plainToken: req.body.payload.plainToken,
+        encryptedToken: token
+      });
+    }
+
+    // Evento: reunion iniciada
+    if (event === 'meeting.started') {
+      res.status(200).json({ success: true });
+
+      const data = req.body.payload?.object;
+      if (!data || !data.id) {
+        console.error('[ZOOM-AGENTE] Payload invalido (meeting.started)');
+        return;
+      }
+
+      const payloadToN8n = {
+        event: 'meeting.started',
+        account: 'agente',
+        meeting_id: data.id,
+        meeting_details: {
+          topic: data.topic,
+          start_time: data.start_time,
+          timezone: data.timezone || 'America/Santiago'
+        },
+        metadata: {
+          generated_at: new Date().toISOString(),
+          source: 'Zoom Webhook Processor - Agente'
+        }
+      };
+
+      try {
+        const webhookUrl = process.env.N8N_AGENT_WEBHOOK_URL_START;
+        if (webhookUrl) {
+          console.log('[ZOOM-AGENTE] Enviando meeting.started a n8n...');
+          await axios.post(webhookUrl, payloadToN8n, {
+            headers: { 'Content-Type': 'application/json' },
+            timeout: 15000
+          });
+          console.log('[ZOOM-AGENTE] Notificacion de inicio enviada');
+        }
+      } catch (err) {
+        console.error('[ZOOM-AGENTE] Error enviando a n8n (inicio):', err.message);
+      }
+      return;
+    }
+
+    // Evento: reunion finalizada
+    if (event === 'meeting.ended') {
+      res.status(200).json({ success: true });
+
+      const data = req.body.payload?.object;
+      if (!data || !data.id) {
+        console.error('[ZOOM-AGENTE] Payload invalido (meeting.ended)');
+        return;
+      }
+
+      const payloadToN8n = {
+        event: 'meeting.ended',
+        account: 'agente',
+        meeting_id: data.id,
+        meeting_details: {
+          topic: data.topic,
+          start_time: data.start_time,
+          end_time: data.end_time,
+          duration: data.duration
+        },
+        metadata: {
+          generated_at: new Date().toISOString(),
+          source: 'Zoom Webhook Processor - Agente'
+        }
+      };
+
+      try {
+        const webhookUrl = process.env.N8N_AGENT_WEBHOOK_URL;
+        if (webhookUrl) {
+          console.log('[ZOOM-AGENTE] Enviando meeting.ended a n8n...');
+          await axios.post(webhookUrl, payloadToN8n, {
+            headers: { 'Content-Type': 'application/json' },
+            timeout: 30000
+          });
+          console.log('[ZOOM-AGENTE] Datos de finalizacion enviados');
+        }
+      } catch (error) {
+        console.error('[ZOOM-AGENTE] Error procesando meeting.ended:', error.message);
+      }
+      return;
+    }
+
+    // Evento: grabacion completada
+    if (event === 'recording.completed') {
+      res.status(200).json({ success: true });
+
+      const data = req.body.payload?.object;
+      if (!data || !data.id) {
+        console.error('[ZOOM-AGENTE] Payload invalido (recording.completed)');
+        return;
+      }
+
+      try {
+        const recordingFiles = (data.recording_files || []).map(file => ({
+          id: file.id,
+          file_type: file.file_type,
+          file_extension: file.file_extension,
+          file_size: file.file_size,
+          play_url: file.play_url,
+          download_url: file.download_url,
+          status: file.status,
+          recording_start: file.recording_start,
+          recording_end: file.recording_end,
+          recording_type: file.recording_type
+        }));
+
+        const payloadToN8n = {
+          event: 'recording.completed',
+          account: 'agente',
+          meeting_id: data.id,
+          meeting_uuid: data.uuid,
+          host_id: data.host_id,
+          host_email: data.host_email,
+          topic: data.topic,
+          type: data.type,
+          start_time: data.start_time,
+          duration: data.duration,
+          total_size: data.total_size,
+          recording_count: data.recording_count,
+          share_url: data.share_url,
+          share_password: data.recording_play_passcode || null,
+          recording_files: recordingFiles,
+          download_token: req.body.download_token || null,
+          metadata: {
+            generated_at: new Date().toISOString(),
+            source: 'Zoom Webhook Processor - Agente'
+          }
+        };
+
+        const webhookUrl = process.env.N8N_AGENT_WEBHOOK_URL_RECORDING;
+        if (webhookUrl) {
+          console.log(`[ZOOM-AGENTE] Recording completed: ${data.topic}`);
+          await axios.post(webhookUrl, payloadToN8n, {
+            headers: { 'Content-Type': 'application/json' },
+            timeout: 30000
+          });
+          console.log('[ZOOM-AGENTE] Recording data sent to n8n');
+        }
+      } catch (error) {
+        console.error('[ZOOM-AGENTE] Error processing recording.completed:', error.message);
+      }
+      return;
+    }
+
+    // Otros eventos
+    res.status(200).end();
+
+  } catch (error) {
+    console.error('[ZOOM-AGENTE] Error critico:', error.message);
+    res.status(500).json({ error: 'Error interno', details: error.message });
+  }
+});
+
+// ============================================================
 // 🆕 ENDPOINTS WHATSAPP - ZOOM MASTER CONTROL
 // ============================================================
 
@@ -729,10 +917,12 @@ app.get('/status', (req, res) => {
       zoom_meetings: '/zoom/meetings',
       zoom_webinars: '/zoom/webinars',
       zoom_recordings: '/zoom/recordings',
-      recording_completed: '/webhook (event: recording.completed)'
+      recording_completed: '/webhook (event: recording.completed)',
+      zoom_agent_webhook: '/webhook-agent'
     },
     config: {
       zoom_configured: !!process.env.ZOOM_CLIENT_ID,
+      zoom_agent_configured: !!process.env.ZOOM_AGENT_WEBHOOK_SECRET_TOKEN,
       n8n_webhook_configured: !!process.env.N8N_WEBHOOK_URL,
       n8n_whatsapp_configured: !!process.env.N8N_WEBHOOK_WHATSAPP,
       n8n_recording_configured: !!process.env.N8N_WEBHOOK_URL_RECORDING,
