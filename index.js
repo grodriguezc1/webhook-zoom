@@ -319,7 +319,17 @@ app.post('/webhook', async (req, res) => {
           headers: { 'Content-Type': 'application/json' },
           timeout: 30000
         });
-        console.log('✅ Recording data sent to n8n');
+        console.log('Recording data sent to n8n');
+
+        // Notify CRM about recording
+        const CRM_REC = process.env.CRM_API_URL || 'https://crm.crogallcapital.com';
+        try {
+          await axios.post(CRM_REC + '/api/zoom/live/recording', {
+            meetingId: String(data.id),
+            shareUrl: shareUrl,
+            sharePassword: sharePassword
+          }, { timeout: 5000 }).catch(() => {});
+        } catch {}
       } catch (error) {
         console.error('Error processing recording.completed:', error.message);
       }
@@ -532,6 +542,16 @@ app.post('/webhook-agent', async (req, res) => {
             timeout: 30000
           });
           console.log('[ZOOM-AGENTE] Recording data sent to n8n');
+
+        // Notify CRM about recording
+        const CRM_REC_AGT = process.env.CRM_API_URL || 'https://crm.crogallcapital.com';
+        try {
+          await axios.post(CRM_REC_AGT + '/api/zoom/live/recording', {
+            meetingId: String(data.id),
+            shareUrl: data.share_url,
+            sharePassword: data.recording_play_passcode || null
+          }, { timeout: 5000 }).catch(() => {});
+        } catch {}
         }
       } catch (error) {
         console.error('[ZOOM-AGENTE] Error processing recording.completed:', error.message);
