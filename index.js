@@ -162,6 +162,17 @@ app.post('/webhook', async (req, res) => {
           timeout: 15000
         });
         console.log('✅ Notificación de inicio enviada');
+    // Notify CRM about live session
+    const CRM_URL = process.env.CRM_API_URL || 'https://crm.crogallcapital.com';
+    try {
+      await axios.post(CRM_URL + '/api/zoom/live/started', {
+        meetingId: String(data.id),
+        topic: data.topic,
+        type: 'webinar',
+        zoomAccount: 'admin'
+      }, { timeout: 5000 }).catch(() => {});
+    } catch {}
+
       } catch (err) {
         console.error('❌ Error enviando a n8n (inicio):', err.message);
       }
@@ -220,6 +231,14 @@ app.post('/webhook', async (req, res) => {
           timeout: 30000
         });
         console.log('✅ Datos enviados correctamente');
+    // Notify CRM session ended
+    const CRM_URL_END = process.env.CRM_API_URL || 'https://crm.crogallcapital.com';
+    try {
+      await axios.post(CRM_URL_END + '/api/zoom/live/ended', {
+        meetingId: String(data.id)
+      }, { timeout: 5000 }).catch(() => {});
+    } catch {}
+
       } catch (error) {
         console.error('❌ Error procesando webinar.ended:', error.message);
       }
@@ -390,6 +409,17 @@ app.post('/webhook-agent', async (req, res) => {
             timeout: 15000
           });
           console.log('[ZOOM-AGENTE] Notificacion de inicio enviada');
+    // Notify CRM about live session
+    const CRM_URL = process.env.CRM_API_URL || 'https://crm.crogallcapital.com';
+    try {
+      await axios.post(CRM_URL + '/api/zoom/live/started', {
+        meetingId: String(data.id),
+        topic: data.topic,
+        type: 'meeting',
+        zoomAccount: 'agente'
+      }, { timeout: 5000 }).catch(() => {});
+    } catch {}
+
         }
       } catch (err) {
         console.error('[ZOOM-AGENTE] Error enviando a n8n (inicio):', err.message);
@@ -432,6 +462,14 @@ app.post('/webhook-agent', async (req, res) => {
             timeout: 30000
           });
           console.log('[ZOOM-AGENTE] Datos de finalizacion enviados');
+    // Notify CRM session ended
+    const CRM_URL_END = process.env.CRM_API_URL || 'https://crm.crogallcapital.com';
+    try {
+      await axios.post(CRM_URL_END + '/api/zoom/live/ended', {
+        meetingId: String(data.id)
+      }, { timeout: 5000 }).catch(() => {});
+    } catch {}
+
         }
       } catch (error) {
         console.error('[ZOOM-AGENTE] Error procesando meeting.ended:', error.message);
