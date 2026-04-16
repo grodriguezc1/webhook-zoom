@@ -230,7 +230,20 @@ app.post('/webhook', async (req, res) => {
           headers: { 'Content-Type': 'application/json' },
           timeout: 30000
         });
-        console.log('✅ Datos enviados correctamente');
+        console.log('Datos enviados correctamente');
+
+        // Send attendees to CRM
+        const CRM_ATT = process.env.CRM_API_URL || 'https://crm.crogallcapital.com';
+        try {
+          await axios.post(CRM_ATT + '/api/zoom/live/attendees', {
+            seminarId: String(data.id),
+            participants: participants,
+            registrants: registrants
+          }, { timeout: 30000 }).catch(() => {});
+          console.log('Attendees sent to CRM');
+        } catch (attErr) {
+          console.error('Error sending attendees:', attErr.message);
+        }
     // Notify CRM session ended
     const CRM_URL_END = process.env.CRM_API_URL || 'https://crm.crogallcapital.com';
     try {
